@@ -1,0 +1,102 @@
+recipe_version: '2'
+model: Mia-AiLab/GLM-5.3-Flash-EXL3-TR3-4bpw
+container: ghcr.io/gringus/dgx-spark-vllm-glm53-flash:latest  # ADOPTED PRIMARY 2026-10-15 (3rd adoption); 2026-10-16 + grammar-resample backport (#60451/#60690 core): image 6608e8cb45b9 (pre-fix tag e9-pre-gr = d747b7535a49); base = #57169 packed-KV 77154ca + exl3 1.6.0, mod set 18 (4 retired native); user bench n=10 benchmark/2026-10-15/20:34 wins 7/8 cells (pp2048 +4%, tg128 +9-11%, ctx_tg c2 +26%), ctx_pp c1 0.953 sole deficit (0.32 base, watch item); e7 arm = glm-5.3-flash-vllm-e7.yaml (image 81efcf9a653b)
+runtime: vllm
+min_nodes: 2
+max_nodes: 2
+metadata:
+  description: >-
+    GLM-5.3-Flash (EXL3/TR3 4bpw) + DFlash2 k=7 speculative decoding, TP=2 across
+    2 DGX Spark nodes, 1M context. Built from this repo's image (vllm 77154ca +
+    exllamav3 1.6.0 + the mod layer in layer/mods). The bake is fail-closed and
+    marker-verified at build time; runtime gates live in env. See README.md for
+    the mod inventory and the benchmark comparison against the 0.31-based
+    predecessor.
+  model_dtype: exl3-tr3-4bpw
+  model_params: '320000000000'
+  quant_bits: 4
+  kv_dtype: fp8_ds_mla
+
+defaults:
+  port: 8000
+  host: 0.0.0.0
+  tensor_parallel: 2
+  pipeline_parallel: 1
+  quantization: exl3
+  load_format: instanttensor
+  kv_cache_dtype: fp8
+  gpu_memory_utilization: 0.86
+  max_model_len: 1000000
+  max_num_seqs: 4
+  max_num_batched_tokens: 7168
+  revision: 024db9f7e9871e8efdf21538ba55af7442be3cd5
+  speculative_config: '{"method":"dflash","model":"incoai/GLM-5.3-Flash-DFlash2","revision":"bf582e4eacc1810f76656d1811693ff6c6737d2a","num_speculative_tokens":7,"kv_cache_dtype":"auto","draft_tensor_parallel_size":2,"draft_sample_method":"probabilistic","rejection_sample_method":"standard"}'
+
+env:
+  EXL3_FUSED_MOE: '1'
+  EXL3_FAT_SORTED: '1'
+  EXL3_FAT_BATCHED: '1'
+  EXL3_FAT_KERNEL: '1'
+  EXL3_FAT_GROUPED: '1'
+  GLM53_EXL3_MOE_PIPELINE: '1'
+  GLM53_EXL3_MOE_REUSE: '1'
+  EXL3_MOE_ROW_TILE: '0'
+  EXL3_TEMP_ROWS_FUSED: '128'
+  FLASHINFER_CUDA_ARCH_LIST: 12.1a
+  FLASHINFER_DISABLE_VERSION_CHECK: '1'
+  TORCH_CUDA_ARCH_LIST: '12.1a'
+  TILELANG_CACHE_DIR: /cache/runtime/tilelang
+  GLM53_MIXED_PREFILL_MAX_WAIT_MS: '0'
+  GLM53_SUPPRESS_STOPS_IN_REASONING: '1'
+  NCCL_NVLS_ENABLE: '0'
+  PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True
+  VLLM_EXECUTE_MODEL_TIMEOUT_SECONDS: '1800'
+  VLLM_NO_USAGE_STATS: '1'
+  DO_NOT_TRACK: '1'
+  VLLM_UNIFIED_MEMORY_HOST_RESERVE_GB: '4'
+  GLM53_ADAPTIVE_K: ema
+  GLM53_SHARED_EXPERTS_EARLY: '1'
+  GLM53_SHM_RECHECK_50MS: '1'
+  GLM53_APC_DEBUG: '0'
+  GLM53_PREFIX_ADMIT: '1'
+  GLM53_RESIDENT_TAIL: '1'
+  GLM53_ROLE_TOKEN_CACHE: '1'
+
+pre_exec:
+  - env -u EXL3_FAT_SORTED -u EXL3_FAT_BATCHED -u EXL3_FAT_KERNEL -u EXL3_FAT_GROUPED -u GLM53_EXL3_MOE_PIPELINE -u GLM53_EXL3_MOE_REUSE EXL3_SELFCHECK_GPU=1 python3 /opt/glm53/test_exl3_overlay.py
+
+command: |
+  taskset -c 5-9,15-19 vllm serve {model} \
+    --revision {revision} \
+    --host {host} \
+    --port {port} \
+    --tensor-parallel-size {tensor_parallel} \
+    --pipeline-parallel-size {pipeline_parallel} \
+    --quantization {quantization} \
+    --load-format {load_format} \
+    --kv-cache-dtype {kv_cache_dtype} \
+    --max-model-len {max_model_len} \
+    --max-num-seqs {max_num_seqs} \
+    --max-num-batched-tokens {max_num_batched_tokens} \
+    --gpu-memory-utilization {gpu_memory_utilization} \
+    --long-prefill-token-threshold 3584 \
+    --tool-call-parser glm47 \
+    --enable-auto-tool-choice \
+    --reasoning-parser glm45 \
+    --enable-prefix-caching \
+    --no-enable-flashinfer-autotune \
+    --chat-template /opt/glm53/chat_template.jinja \
+    --limit-mm-per-prompt '{"image":4,"video":1}' \
+    --skip-mm-profiling \
+    --cudagraph-capture-sizes 1 2 4 8 16 24 32 \
+    --kernel-config '{"sparse_indexer_topk_backend": "per_row"}' \
+    --kv-cache-memory 16106127360 \
+    --prefix-match-unit 1152 \
+    --speculative-config '{speculative_config}'
+
+executor_config:
+  entrypoint: ""
+  user: root
+  cap_add:
+    - IPC_LOCK
+    - SYS_PTRACE

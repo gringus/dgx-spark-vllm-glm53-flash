@@ -1,0 +1,332 @@
+diff --git a/vllm/envs.py b/vllm/envs.py
+old mode 100755
+new mode 100644
+index dbbc49f..6c7de49
+--- a/vllm/envs.py
++++ b/vllm/envs.py
+@@ -327,6 +327,7 @@ if TYPE_CHECKING:
+     VLLM_ELASTIC_EP_SCALE_UP_LAUNCH: bool = False
+     VLLM_ELASTIC_EP_DRAIN_REQUESTS: bool = False
+     VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS: bool = True
++    VLLM_UNIFIED_MEMORY_HOST_RESERVE_GB: float = 8.0
+     VLLM_XPU_FORCE_N_CONTIG_WEIGHT: bool = False
+     VLLM_XPU_USE_SAMPLER_KERNEL: bool = True
+     VLLM_XPU_INC_WNA16_BACKEND: Literal["auto", "ark", "w4a16", "w4a8"] = "auto"
+@@ -2225,6 +2226,16 @@ environment_variables: dict[str, Callable[[], Any]] = {
+     "VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS": lambda: bool(
+         int(os.getenv("VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS", "1"))
+     ),
++    # Host-memory headroom (in GiB) to keep free on integrated / unified-memory
++    # GPUs (e.g. GB10 / DGX Spark, GH200, Jetson) during startup profiling.
++    # On these devices CPU and GPU share one physical pool, so
++    # gpu_memory_utilization alone does not reserve memory for the OS. vLLM caps
++    # the profiling/KV budget so at least this many GiB stay available; if the
++    # requested budget would drop below it, startup fails cleanly instead of
++    # wedging the host. Ignored on discrete GPUs.
++    "VLLM_UNIFIED_MEMORY_HOST_RESERVE_GB": lambda: float(
++        os.getenv("VLLM_UNIFIED_MEMORY_HOST_RESERVE_GB", "8.0")
++    ),
+     # Force N-contiguous weight layout for all XPU unquantized linears.
+     "VLLM_XPU_FORCE_N_CONTIG_WEIGHT": lambda: bool(
+         int(os.getenv("VLLM_XPU_FORCE_N_CONTIG_WEIGHT", "0"))
+diff --git a/vllm/utils/mem_utils.py b/vllm/utils/mem_utils.py
+index 1b44905..27a6136 100644
+--- a/vllm/utils/mem_utils.py
++++ b/vllm/utils/mem_utils.py
+@@ -11,6 +11,7 @@ import psutil
+ import torch
+ import torch.types
+ 
++import vllm.envs as envs
+ from vllm.logger import init_logger
+ from vllm.platforms import current_platform
+ 
+@@ -79,6 +80,145 @@ def release_device_memory_under_pressure(device: torch.device) -> bool:
+     return True
+ 
+ 
++def unified_memory_host_reserve_bytes(total_memory: int) -> int:
++    """Host-memory headroom to keep free on integrated (unified-memory) GPUs.
++
++    On integrated GPUs the CPU/OS and the GPU share one physical pool, so
++    ``gpu_memory_utilization`` does not by itself reserve memory for the host.
++    This returns how many bytes to keep free for the OS: the larger of an
++    absolute floor (``VLLM_UNIFIED_MEMORY_HOST_RESERVE_GB``) and a small
++    fraction of the pool, so the reserve scales with pool size.
++
++    Args:
++        total_memory: Total size of the unified memory pool, in bytes.
++
++    Returns:
++        The number of bytes to leave available for the OS.
++    """
++    absolute_floor = int(envs.VLLM_UNIFIED_MEMORY_HOST_RESERVE_GB * GiB_bytes)
++    proportional_floor = total_memory // 20  # 5% of the shared pool
++    return max(absolute_floor, proportional_floor)
++
++
++def cap_unified_memory_budget(
++    device: torch.types.Device,
++    requested_memory: int,
++    available_memory: int,
++    total_memory: int,
++) -> int:
++    """Cap a memory budget so an integrated GPU leaves headroom for the OS.
++
++    ``gpu_memory_utilization`` is expressed against total device memory. On an
++    integrated (unified-memory) GPU that total is the same pool the OS uses, so
++    the raw ``util * total`` budget can starve the host. This caps the budget by
++    ``available_memory - reserve`` so the host keeps a floor of free memory.
++    A no-op on discrete GPUs (the two pools are independent there).
++
++    Args:
++        device: The device the budget is for.
++        requested_memory: The uncapped budget (``util * total``), in bytes.
++        available_memory: Currently available host/device memory, in bytes.
++        total_memory: Total unified pool size, in bytes.
++
++    Returns:
++        The capped budget in bytes (unchanged on discrete GPUs).
++    """
++    if device is None:
++        return requested_memory
++    device_ = torch.device(device)
++    device_index = device_.index if device_.index is not None else 0
++    if device_.type != "cuda" or not current_platform.is_integrated_gpu(device_index):
++        return requested_memory
++
++    reserve = unified_memory_host_reserve_bytes(total_memory)
++    honest_cap = available_memory - reserve
++    if requested_memory <= honest_cap:
++        return requested_memory
++
++    logger.warning(
++        "Integrated (unified-memory) GPU detected: capping the memory budget "
++        "from %sGiB to %sGiB to keep %sGiB free for the OS. On these devices "
++        "gpu_memory_utilization does not reserve host memory; tune it (or "
++        "VLLM_UNIFIED_MEMORY_HOST_RESERVE_GB) if you need a different split.",
++        format_gib(requested_memory),
++        format_gib(max(honest_cap, 0)),
++        format_gib(reserve),
++    )
++    return max(honest_cap, 0)
++
++
++def allocator_ceiling_bytes(
++    requested_memory: int,
++    free_memory: int,
++    total_memory: int,
++    explicit_kv_cache_bytes: int | None,
++) -> int:
++    """Pick the ceiling to hand :func:`limit_torch_allocator_to_budget`.
++
++    Normally that is the budget itself (``util * total``, already capped to the
++    host reserve). When ``kv_cache_memory_bytes`` is set the user has opted out
++    of ``gpu_memory_utilization`` for sizing the cache, so a utilization-derived
++    ceiling would bound a cache the setting is meant to free from it -- with
++    ``util=0.1`` on a 120 GiB pool the ceiling is 12 GiB, below a 20 GiB cache
++    on its own. Use the host-reserve ceiling there instead: that is what keeps
++    the OS alive, which explicit sizing must not opt out of.
++
++    Args:
++        requested_memory: The capped budget, in bytes.
++        free_memory: Currently available memory, in bytes.
++        total_memory: Total pool size, in bytes.
++        explicit_kv_cache_bytes: ``cache_config.kv_cache_memory_bytes``, or None.
++
++    Returns:
++        The allocation ceiling in bytes.
++    """
++    if not explicit_kv_cache_bytes:
++        return requested_memory
++    reserve = unified_memory_host_reserve_bytes(total_memory)
++    return max(requested_memory, free_memory - reserve)
++
++
++def limit_torch_allocator_to_budget(
++    device: torch.types.Device,
++    budget_memory: int,
++    total_memory: int,
++) -> bool:
++    """Hard-cap the torch caching allocator on integrated GPUs.
++
++    Bounds torch allocations to ``budget_memory / total_memory`` of the pool so
++    a startup profiling transient that would exceed the budget raises a clean
++    ``torch.OutOfMemoryError`` instead of physically exhausting the shared pool
++    and wedging the host. Pass the budget from ``cap_unified_memory_budget`` so
++    the cap follows the memory actually available (not the pool size) on a
++    busy host. A no-op on discrete GPUs, where an over-allocation already fails
++    cleanly against a separate VRAM pool.
++
++    Args:
++        device: The device to cap.
++        budget_memory: The allocation ceiling, in bytes.
++        total_memory: Total device memory, in bytes.
++
++    Returns:
++        True if a cap was applied.
++    """
++    if device is None or total_memory <= 0:
++        return False
++    device_ = torch.device(device)
++    device_index = device_.index if device_.index is not None else 0
++    if device_.type != "cuda" or not current_platform.is_integrated_gpu(device_index):
++        return False
++
++    fraction = max(0.0, min(1.0, budget_memory / total_memory))
++    torch.cuda.set_per_process_memory_fraction(fraction, device_index)
++    logger.info(
++        "Integrated GPU: limiting torch allocations to %sGiB (%.1f%% of the "
++        "unified pool) so profiling cannot wedge the host.",
++        format_gib(budget_memory),
++        fraction * 100,
++    )
++    return True
++
++
+ class DeviceMemoryProfiler:
+     def __init__(self, device: torch.types.Device | None = None):
+         self.device = device
+diff --git a/vllm/v1/worker/gpu_worker.py b/vllm/v1/worker/gpu_worker.py
+index aaab37a..f980908 100644
+--- a/vllm/v1/worker/gpu_worker.py
++++ b/vllm/v1/worker/gpu_worker.py
+@@ -85,7 +85,9 @@ from vllm.utils.mem_constants import GiB_bytes
+ from vllm.utils.mem_utils import (
+     MemoryProfilingResult,
+     MemorySnapshot,
++    allocator_ceiling_bytes,
+     format_gib,
++    limit_torch_allocator_to_budget,
+     memory_profiling,
+ )
+ from vllm.utils.torch_utils import set_random_seed, set_torch_threads_for_runtime
+@@ -636,6 +638,31 @@ class Worker(WorkerBase):
+         with set_current_vllm_config(self.vllm_config):
+             self.model_runner.reload_weights(*args, **kwargs)
+ 
++    def _profile_run_guarded(self, *args, **kwargs) -> None:
++        """Run the profiling forward pass, turning an integrated-GPU OOM into a
++        clear, actionable error instead of a host wedge.
++
++        On unified-memory GPUs the torch allocator is capped to the memory
++        budget before profiling, so an over-large profiling transient raises
++        ``torch.OutOfMemoryError`` here rather than exhausting the shared pool.
++        """
++        try:
++            self.model_runner.profile_run(*args, **kwargs)
++        except torch.OutOfMemoryError as e:
++            assert self.device is not None
++            device_index = self.device.index if self.device.index is not None else 0
++            if not current_platform.is_integrated_gpu(device_index):
++                raise
++            raise torch.OutOfMemoryError(
++                "Ran out of memory during startup profiling on an integrated "
++                "(unified-memory) GPU. The profiling batch exceeded the memory "
++                "budget (gpu_memory_utilization, capped to the memory available "
++                "to the process), which is enforced up front so profiling "
++                "cannot wedge the host. Reduce max_num_batched_tokens, "
++                "max_num_seqs or max_model_len, or raise gpu_memory_utilization "
++                "if the host has the headroom, and retry."
++            ) from e
++
+     @torch.inference_mode()
+     def determine_available_memory(self) -> int:
+         """Profiles the peak memory usage of the model to determine how much
+@@ -652,11 +679,35 @@ class Worker(WorkerBase):
+         """
+         maybe_apply_startup_plan(self)
+ 
++        # On integrated (unified-memory) GPUs, cap the torch allocator to the
++        # memory budget before profiling. `self.requested_memory` is
++        # `util * total`, capped by `cap_unified_memory_budget` to the memory
++        # actually available minus a host reserve, so on a busy host the cap
++        # tracks what is available rather than the pool size. Without it the
++        # profiling transient can exhaust the pool shared with the OS and
++        # hard-wedge the host instead of failing cleanly (issue #46307).
++        # Weights, the profiling transient and the KV cache are all sized to fit
++        # inside this budget, so the cap only stops a transient that would have
++        # failed the budget check anyway. No-op on discrete GPUs.
++        # `kv_cache_memory_bytes` opts out of `gpu_memory_utilization`, so the
++        # ceiling must not be derived from it -- see allocator_ceiling_bytes().
++        allocator_ceiling = allocator_ceiling_bytes(
++            self.requested_memory,
++            self.init_snapshot.free_memory,
++            self.init_snapshot.total_memory,
++            self.cache_config.kv_cache_memory_bytes,
++        )
++        limit_torch_allocator_to_budget(
++            self.device,
++            allocator_ceiling,
++            self.init_snapshot.total_memory,
++        )
++
+         if kv_cache_memory_bytes := self.cache_config.kv_cache_memory_bytes:
+             # still need a profile run which compiles the model for
+             # max_num_batched_tokens
+             with set_current_vllm_config(self.vllm_config):
+-                self.model_runner.profile_run(
++                self._profile_run_guarded(
+                     randomize_inputs=self.randomize_dummy_inputs
+                 )
+ 
+@@ -696,7 +747,9 @@ class Worker(WorkerBase):
+             self._scoped_allocator_max_split(max_split_size_mb=20),
+             set_current_vllm_config(self.vllm_config),
+         ):
+-            self.model_runner.profile_run(randomize_inputs=self.randomize_dummy_inputs)
++            self._profile_run_guarded(
++                randomize_inputs=self.randomize_dummy_inputs
++            )
+ 
+         # Profile CUDA graph memory if graphs will be captured.
+         # ROCm is included: #44825 moved the profiler to
+diff --git a/vllm/v1/worker/utils.py b/vllm/v1/worker/utils.py
+index d10cdce..d5f48b7 100644
+--- a/vllm/v1/worker/utils.py
++++ b/vllm/v1/worker/utils.py
+@@ -19,7 +19,12 @@ from vllm.model_executor.models.interfaces import MultiModalEmbeddings
+ from vllm.model_executor.models.utils import extract_layer_index
+ from vllm.platforms import current_platform
+ from vllm.triton_utils import tl, triton
+-from vllm.utils.mem_utils import MemorySnapshot, format_gib
++from vllm.utils.mem_utils import (
++    MemorySnapshot,
++    cap_unified_memory_budget,
++    format_gib,
++    unified_memory_host_reserve_bytes,
++)
+ from vllm.utils.torch_utils import async_tensor_h2d
+ from vllm.v1.attention.backend import (
+     AttentionBackend,
+@@ -725,6 +730,30 @@ def request_memory(
+         init_snapshot.total_memory * cache_config.gpu_memory_utilization
+     )
+ 
++    # On integrated (unified-memory) GPUs the CPU/OS and GPU share one pool, so
++    # `util * total` can claim memory the OS needs. Cap the budget so a host
++    # reserve stays free (no-op on discrete GPUs). See issue #46307.
++    requested_memory = cap_unified_memory_budget(
++        init_snapshot.device_,
++        requested_memory,
++        init_snapshot.free_memory,
++        init_snapshot.total_memory,
++    )
++
++    # A non-positive budget means the host is already at or below its reserve.
++    # Reject it here, before the caller loads weights: the free-memory check
++    # below cannot catch it (free_memory is never < 0), and the allocator cap
++    # that would otherwise stop the run is not installed until profiling.
++    if requested_memory <= 0:
++        raise ValueError(
++            f"No memory budget left on device {init_snapshot.device_}: "
++            f"{format_gib(init_snapshot.free_memory)} GiB available of "
++            f"{format_gib(init_snapshot.total_memory)} GiB is at or below the "
++            f"{format_gib(unified_memory_host_reserve_bytes(init_snapshot.total_memory))}"
++            " GiB host reserve kept free for the OS on integrated GPUs. Free "
++            "memory on the host, or lower VLLM_UNIFIED_MEMORY_HOST_RESERVE_GB."
++        )
++
+     if external_weight_memory > 0:
+         engine_memory = requested_memory - external_weight_memory
+         if engine_memory <= 0:

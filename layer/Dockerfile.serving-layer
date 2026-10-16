@@ -1,0 +1,11 @@
+# serving bake layer: FROM the 77154ca chain (exllamav3 1.6.0 base stage); applies the re-derived mod set at build time
+# A patch failure here fails the BUILD. Our selfcheck overrides the chain's copy
+# (asserts aligned to the drafter-group rewrite's tree).
+ARG BASE=glm53-selfbuild:serving-chain
+FROM ${BASE}
+# bake-serving.sh, NOT bake.sh: the kit context ships its own bake.sh; copying
+# the wrong one fails closed at the first mod whose anchor the base lacks.
+COPY bake-serving.sh /opt/glm53/bake.sh
+COPY mods-serving/ /opt/glm53/mods/
+COPY test_exl3_overlay.py /opt/glm53/test_exl3_overlay.py
+RUN bash /opt/glm53/bake.sh

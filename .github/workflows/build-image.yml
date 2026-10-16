@@ -1,0 +1,51 @@
+name: build-image
+
+# The image is ~49 GB unpacked: hosted runners cannot host this build (disk).
+# Runs on a self-hosted aarch64 runner (DGX Spark / GB10 class, >=100G free
+# disk, docker+buildkit, engine down). Trigger manually or by pushing a tag.
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "image tag suffix (default: latest)"
+        default: "latest"
+        required: false
+  push:
+    tags:
+      - "**"
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    runs-on: [self-hosted, dgx-spark]
+    timeout-minutes: 300
+    steps:
+      - name: Check out this repo
+        uses: actions/checkout@v4
+
+      - name: Preflight — warn when the serving engine is up
+        run: |
+          if docker ps --format '{{.Image}}' | grep -q glm53-selfbuild; then
+            echo "::warning::A glm53-selfbuild container is running on this host."
+            echo "::warning::The build prefers the engine DOWN (nvcc needs >10G host RAM;"
+            echo "::warning::building under load invites the GB10 UVM-livelock class and"
+            echo "::warning::may fail on memory). Continuing — the operator owns this call."
+          fi
+
+      - name: Log in to ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        env:
+          IMAGE: ghcr.io/${{ github.repository }}
+          REF: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.ref || github.ref_name }}
+          SHIP_OTHER: "0"
+        run: bash ci/build-image.sh

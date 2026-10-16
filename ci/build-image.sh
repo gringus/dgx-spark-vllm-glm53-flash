@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+# Build the GLM-5.3-Flash vllm serving image from this repo.
+#
+# Requirements on the build host (aarch64, DGX Spark / GB10 class):
+#   - docker with buildkit, >=100G free disk on /
+#   - the ENGINE MUST BE DOWN while building (nvcc wants >10G host RAM; building
+#     while the engine runs invites the GB10 UVM-livelock class)
+#   - nothing else: the kit clone and the mod layer come from this repo
+#
+# Env:
+#   IMAGE       ghcr target, e.g. ghcr.io/gringus/dgx-spark-vllm-glm53-flash (required)
+#   REF         tag suffix for $IMAGE (default: latest)
+#   LOCAL_TAG   local docker tag produced by the chain (default glm53-selfbuild:serving)
+#   SHIP_OTHER  1 = ship to the peer spark node after build (default 1; 0 = skip)
+#   KIT_BRANCH  kit branch (default e8-exl3160)
+#   BASE        the vllm nightly the serving lane requires (default: the pinned
+#               77154ca cu134 digest; the lane REFUSEs on anything else)
+set -euo pipefail
+REPO_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+IMAGE=${IMAGE:?set IMAGE=ghcr.io/<owner>/<name>}
+REF=${REF:-latest}
+LOCAL_TAG=${LOCAL_TAG:-glm53-selfbuild:serving}
+KIT_BRANCH=${KIT_BRANCH:-e8-exl3160}
+BASE=${BASE:-vllm/vllm-openai@sha256:94ac05830c84fd3cfafc792d932e7ce1a5f42404b28f0d3b0dbcc63abdab30a8}
+KIT=$HOME/glm53-kit
+
+# 1. kit clone at the pinned branch
+if [ -d "$KIT/.git" ]; then
+  git -C "$KIT" fetch origin -q
+else
+  git clone --depth 50 https://github.com/Reederey87/glm53-flash-exl3-2x-dgx-spark "$KIT"
+fi
+git -C "$KIT" checkout -q "$KIT_BRANCH"
+echo "kit: $KIT_BRANCH at $(git -C "$KIT" rev-parse --short HEAD)"
+
+# 2. stage this repo's mod layer into the kit build context
+#    (file names match what scripts/glm53-selfbuild.sh expects)
+cp "$REPO_DIR/layer/Dockerfile.serving-layer" "$KIT/"
+cp "$REPO_DIR/layer/bake-serving.sh" "$KIT/bake-serving.sh"
+cp "$REPO_DIR/layer/test_exl3_overlay.py" "$KIT/"
+rm -rf "$KIT/mods-serving" && cp -r "$REPO_DIR/layer/mods" "$KIT/mods-serving"
+( cd "$KIT" && ls Dockerfile.serving-layer bake-serving.sh mods-serving test_exl3_overlay.py >/dev/null && bash -n bake-serving.sh )
+
+# 3. build (merged-Dockerfile generation + the 77154ca base swap live in the
+#    vendored script; the bake inside the build is fail-closed, 31-marker check)
+KIT="$KIT" TAG="$LOCAL_TAG" BASE="$BASE" SHIP_OTHER="${SHIP_OTHER:-1}" bash "$REPO_DIR/scripts/glm53-selfbuild.sh"
+
+# 4. publish
+IMG_ID=$(docker images --format '{{.ID}}' "$LOCAL_TAG" | head -1)
+[ -n "$IMG_ID" ] || { echo "build produced no $LOCAL_TAG"; exit 1; }
+docker tag "$IMG_ID" "$IMAGE:$REF"
+docker push "$IMAGE:$REF"
+echo "PUBLISHED: $IMAGE:$REF ($IMG_ID)"

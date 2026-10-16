@@ -1,0 +1,21 @@
+dgx-spark-vllm-glm53-flash
+Copyright 2026 the repo authors
+
+This product builds on the following projects; their license notices carry
+over into the built container image:
+
+- Reederey87/glm53-flash-exl3-2x-dgx-spark (the image build chain) — Apache-2.0
+  https://github.com/Reederey87/glm53-flash-exl3-2x-dgx-spark
+- vllm (vllm-project/vllm), base commit 77154ca61 — Apache-2.0
+  https://github.com/vllm-project/vllm
+- exllamav3 (turboderp-org/exllamav3), v1.6.0 — see its LICENSE
+  https://github.com/turboderp-org/exllamav3
+- FlashInfer (flashinfer-ci/flashinfer) 0.7.0.post1 — Apache-2.0
+- DeepGEMM (deepseek-ai/DeepGEMM), pin 6ce1c5ec66 — MIT
+- PyTorch, Triton and their CUDA runtime dependencies — their respective
+  licenses (BSD-style)
+
+The model weights are NOT part of the image and are pulled at serving time:
+- Mia-AiLab/GLM-5.3-Flash-EXL3-TR3-4bpw (target)
+- incoai/GLM-5.3-Flash-DFlash2 (drafter)
+Model weights remain under their publisher's terms.
