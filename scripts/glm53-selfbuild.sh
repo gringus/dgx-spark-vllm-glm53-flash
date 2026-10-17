@@ -493,14 +493,14 @@ if s.count("glm53 NoPE sparse-MLA overlay verify OK") != 1:
     raise SystemExit("[e8-adapt] FAIL: base-stage patcher/verify heredocs not found")
 PYE8ADAPT
   ;;
-  *:serving)
+  *:serving*)
     [ -f "$KIT/Dockerfile.serving-layer" ] || { echo "REFUSING: TAG=$TAG needs the serving mod layer - stage it per ci/build-image.sh"; exit 1; }
     EXPECTED_BASE=${EXPECTED_BASE:-94ac05830}
     case "$BASE" in
       *$EXPECTED_BASE*) : ;;
       *) echo "REFUSING: TAG=$TAG needs BASE containing $EXPECTED_BASE (set EXPECTED_BASE to override the pin)"; exit 1 ;;
     esac
-    merge "FROM e3-final AS e8" Dockerfile.serving-layer
+    merge "FROM e3-final AS serving" Dockerfile.serving-layer
     python3 - "$DF" <<'PYSERVING'
 import re, sys
 p = sys.argv[1]
@@ -1096,6 +1096,48 @@ open(p, "w").write(s)
 if s.count("glm53 NoPE sparse-MLA overlay verify OK") != 1:
     raise SystemExit("[serving-adapt] FAIL: base-stage patcher/verify heredocs not found")
 PYSERVINGADAPT
+    # --- serving base-heredoc adaptation (a3bc7f09) ---------------------------
+    # a3bc7f09 (0.32.0rc1.dev329+g39983a5e7) vs the pinned 77154ca lane: the
+    # only genuine drift found by the full pre-flight (merged patcher/verify/
+    # quant heredocs + all 18 serving mods + the 31-marker tripwire, run
+    # against the extracted a3bc7f09 tree) is the ModelConfig quantization
+    # overrides list losing native "exl3" (config/model.py) - re-add it inside
+    # the QuantizationMethods heredoc so Exl3Config.override_quantization_method
+    # stays reachable for EXL3 checkpoints. Fail-closed, idempotent.
+    python3 - "$DF" <<'PYA3BC'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+if "re-added exl3 to the ModelConfig overrides list" in s:
+    print("[a3bc-adapt] already adapted (idempotent)")
+else:
+    anchor = 'print("registered exl3 in QUANTIZATION_METHODS (lazy import)")' + chr(10)
+    c = s.count(anchor)
+    if c != 1:
+        raise SystemExit("[a3bc-adapt] FAIL: quant-heredoc anchor count=" + str(c) + " (expected 1)")
+    ins = [
+        '# a3bc7f09: the ModelConfig quantization overrides list lost native "exl3"',
+        "# (present at 77154ca); re-add it so Exl3Config.override_quantization_method",
+        "# stays reachable for EXL3 checkpoints (kit overlay registers the method in",
+        "# QuantizationMethods above).",
+        'model_cfg = Path("/usr/local/lib/python3.12/dist-packages/vllm/config/model.py")',
+        "mtext = model_cfg.read_text()",
+        "NL = chr(10)",
+        '_old = "            overrides = [" + NL + chr(32) * 16 + chr(34) + "auto_gptq" + chr(34) + "," + NL',
+        '_probe = chr(32) * 16 + chr(34) + "exl3" + chr(34) + "," + NL + chr(32) * 16 + chr(34) + "auto_gptq" + chr(34) + "," + NL',
+        "if _probe not in mtext:",
+        "    if mtext.count(_old) != 1:",
+        '        raise RuntimeError("expected one ModelConfig quantization overrides list")',
+        "    model_cfg.write_text(mtext.replace(",
+        "        _old,",
+        '        _old.replace(chr(34) + "auto_gptq" + chr(34) + "," + NL, chr(34) + "exl3" + chr(34) + "," + NL + chr(32) * 16 + chr(34) + "auto_gptq" + chr(34) + "," + NL),',
+        "    ))",
+        '    print("re-added exl3 to the ModelConfig overrides list")',
+    ]
+    s = s.replace(anchor, chr(10).join(ins) + chr(10) + anchor)
+    print("[a3bc-adapt] a3bc-exl3-overrides: injected into the quant heredoc")
+open(p, "w").write(s)
+PYA3BC
 ;;
   *:e7)
     [ -f "$KIT/Dockerfile.e7-layer" ] || { echo "REFUSING: TAG=$TAG needs the e7 bake layer - run ~/spark/e7/stage-e7.sh first"; exit 1; }
@@ -1665,7 +1707,7 @@ case "$TAG" in
   *e4-fast) echo "e4-fast lane is CLOSED (MiaAI kernel-API incompatibility) - see e4/README.md"; exit 1 ;;
   *:e7)     FINAL=e7 ;;
   *:e8)     FINAL=e8 ;;
-  *:serving)     FINAL=serving ;;
+  *:serving*)     FINAL=serving ;;
   *:e6)     FINAL=e6 ;;
   *:e4*)    FINAL=e4 ;;
   *)        FINAL=e3-final ;;

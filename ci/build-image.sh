@@ -21,6 +21,9 @@ IMAGE=${IMAGE:-}
 REF=${REF:-latest}
 LOCAL_TAG=${LOCAL_TAG:-glm53-selfbuild:serving}
 KIT_BRANCH=${KIT_BRANCH:-e8-exl3160}
+# kit source: OUR fork carries the e8-exl3160 branch (exl3 1.6.0 retarget); upstream
+# Reederey87 main is the 1.4.9-era kit and does not have the branch
+KIT_REPO=${KIT_REPO:-https://github.com/gringus/glm53-flash-exl3-2x-dgx-spark.git}
 BASE=${BASE:-vllm/vllm-openai@sha256:94ac05830c84fd3cfafc792d932e7ce1a5f42404b28f0d3b0dbcc63abdab30a8}
 EXPECTED_BASE=${EXPECTED_BASE:-}
 KIT=$HOME/glm53-kit
@@ -29,9 +32,9 @@ KIT=$HOME/glm53-kit
 if [ -d "$KIT/.git" ]; then
   git -C "$KIT" fetch origin -q
 else
-  git clone --depth 50 https://github.com/Reederey87/glm53-flash-exl3-2x-dgx-spark "$KIT"
+  git clone --depth 50 "$KIT_REPO" "$KIT"
 fi
-git -C "$KIT" checkout -q "$KIT_BRANCH"
+git -C "$KIT" checkout -q "$KIT_BRANCH" 2>/dev/null || { git -C "$KIT" fetch origin "$KIT_BRANCH" -q && git -C "$KIT" checkout -q "$KIT_BRANCH"; }
 echo "kit: $KIT_BRANCH at $(git -C "$KIT" rev-parse --short HEAD)"
 
 # 2. stage this repo's mod layer into the kit build context
