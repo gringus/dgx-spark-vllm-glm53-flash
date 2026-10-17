@@ -17,7 +17,7 @@
 #               77154ca cu134 digest; the lane REFUSEs on anything else)
 set -euo pipefail
 REPO_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-IMAGE=${IMAGE:?set IMAGE=ghcr.io/<owner>/<name>}
+IMAGE=${IMAGE:-}
 REF=${REF:-latest}
 LOCAL_TAG=${LOCAL_TAG:-glm53-selfbuild:serving}
 KIT_BRANCH=${KIT_BRANCH:-e8-exl3160}
@@ -50,6 +50,7 @@ KIT="$KIT" TAG="$LOCAL_TAG" BASE="$BASE" EXPECTED_BASE="$EXPECTED_BASE" SHIP_OTH
 IMG_ID=$(docker images --format '{{.ID}}' "$LOCAL_TAG" | head -1)
 [ -n "$IMG_ID" ] || { echo "build produced no $LOCAL_TAG"; exit 1; }
 if [ "${PUBLISH:-1}" = 1 ]; then
+  [ -n "$IMAGE" ] || { echo "PUBLISH=1 needs IMAGE=ghcr.io/<owner>/<name>"; exit 1; }
   docker tag "$IMG_ID" "$IMAGE:$REF"
   docker push "$IMAGE:$REF"
   echo "PUBLISHED: $IMAGE:$REF ($IMG_ID)"
