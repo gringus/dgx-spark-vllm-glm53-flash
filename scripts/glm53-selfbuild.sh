@@ -495,9 +495,10 @@ PYE8ADAPT
   ;;
   *:serving)
     [ -f "$KIT/Dockerfile.serving-layer" ] || { echo "REFUSING: TAG=$TAG needs the serving mod layer - stage it per ci/build-image.sh"; exit 1; }
+    EXPECTED_BASE=${EXPECTED_BASE:-94ac05830}
     case "$BASE" in
-      *94ac05830*) : ;;
-      *) echo "REFUSING: TAG=$TAG needs BASE=vllm/vllm-openai@sha256:94ac05830... (cu134 nightly 77154ca)"; exit 1 ;;
+      *$EXPECTED_BASE*) : ;;
+      *) echo "REFUSING: TAG=$TAG needs BASE containing $EXPECTED_BASE (set EXPECTED_BASE to override the pin)"; exit 1 ;;
     esac
     merge "FROM e3-final AS e8" Dockerfile.serving-layer
     python3 - "$DF" <<'PYSERVING'

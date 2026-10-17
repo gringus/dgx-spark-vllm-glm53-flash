@@ -22,6 +22,7 @@ REF=${REF:-latest}
 LOCAL_TAG=${LOCAL_TAG:-glm53-selfbuild:serving}
 KIT_BRANCH=${KIT_BRANCH:-e8-exl3160}
 BASE=${BASE:-vllm/vllm-openai@sha256:94ac05830c84fd3cfafc792d932e7ce1a5f42404b28f0d3b0dbcc63abdab30a8}
+EXPECTED_BASE=${EXPECTED_BASE:-}
 KIT=$HOME/glm53-kit
 
 # 1. kit clone at the pinned branch
@@ -43,11 +44,15 @@ rm -rf "$KIT/mods-serving" && cp -r "$REPO_DIR/layer/mods" "$KIT/mods-serving"
 
 # 3. build (merged-Dockerfile generation + the 77154ca base swap live in the
 #    vendored script; the bake inside the build is fail-closed, 31-marker check)
-KIT="$KIT" TAG="$LOCAL_TAG" BASE="$BASE" SHIP_OTHER="${SHIP_OTHER:-1}" bash "$REPO_DIR/scripts/glm53-selfbuild.sh"
+KIT="$KIT" TAG="$LOCAL_TAG" BASE="$BASE" EXPECTED_BASE="$EXPECTED_BASE" SHIP_OTHER="${SHIP_OTHER:-1}" bash "$REPO_DIR/scripts/glm53-selfbuild.sh"
 
-# 4. publish
+# 4. publish (PUBLISH=0 for local experiment builds — no ghcr push)
 IMG_ID=$(docker images --format '{{.ID}}' "$LOCAL_TAG" | head -1)
 [ -n "$IMG_ID" ] || { echo "build produced no $LOCAL_TAG"; exit 1; }
-docker tag "$IMG_ID" "$IMAGE:$REF"
-docker push "$IMAGE:$REF"
-echo "PUBLISHED: $IMAGE:$REF ($IMG_ID)"
+if [ "${PUBLISH:-1}" = 1 ]; then
+  docker tag "$IMG_ID" "$IMAGE:$REF"
+  docker push "$IMAGE:$REF"
+  echo "PUBLISHED: $IMAGE:$REF ($IMG_ID)"
+else
+  echo "LOCAL BUILD DONE: $LOCAL_TAG ($IMG_ID) — publish skipped (PUBLISH=0)"
+fi
