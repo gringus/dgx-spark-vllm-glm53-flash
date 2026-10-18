@@ -1,4 +1,4 @@
-# GLM-5.3-Flash serving image for 2× NVIDIA DGX Spark (vllm 77154ca, exllamav3 1.6.0)
+# GLM-5.3-Flash serving image for 2× NVIDIA DGX Spark (vllm 77154ca, exllamav3 1.6.0; 1.6.3 retarget on the `e10-exl3163` branch)
 
 Production-serving container for **GLM-5.3-Flash** (320B MoE, 18B active) on a
 pair of **NVIDIA DGX Spark** machines (GB10 Grace Blackwell, 121 GiB unified
@@ -6,7 +6,7 @@ memory each): tensor-parallel 2 over the 200 Gb QSFP link, DFlash2 speculative
 decoding (k=7), 1M-token context, prefix-cache-friendly hybrid KDA(mamba)+MLA
 serving.
 
-The image is **vllm at nightly `77154ca61`** (the #57169 native packed-KV line)
+The published image is **vllm at nightly `77154ca61`** (the #57169 native packed-KV line)
 with **exllamav3 1.6.0** and **18 targeted mods** applied at build time
 (fail-closed, marker-verified). Every mod is in
 [[`layer/mods/`](layer/mods/) — nothing is hidden in the base image.
@@ -100,7 +100,7 @@ Models pulled at start:
   - #57169 — native packed-KV layout / `SlidingWindowSpec` drafter ring (the reason this generation exists)
   - #60690 / #60451 — grammar-invalid draft resampling bias (backported as `glm53-upstream-grammar-resample`)
   - #49760 — unified-memory budget cap (backported as `glm53-upstream-gbm`)
-- exllamav3: [turboderp-org/exllamav3](https://github.com/turboderp-org/exllamav3), v1.6.0 (`151539c`)
+- exllamav3: [turboderp-org/exllamav3](https://github.com/turboderp-org/exllamav3), v1.6.0 (`151539c`) for the published image; the kit fork's `e10-exl3163` branch retargets to v1.6.3 (`a3bfbfd`, experimental — quality-positive on the hard eval suite, ctx_tg c2 watch item rides the newer vllm nightly it was benched with)
 - FlashInfer: [flashinfer-ci/flashinfer](https://github.com/flashinfer-ci/flashinfer) 0.7.0.post1
 - NVIDIA DeepGEMM: [deep-gemm](https://github.com/deepseek-ai/DeepGEMM) (pin `6ce1c5ec66`)
 - Upstream issue #53436 — spec-decode temp-0 run-to-run nondeterminism on SM120 (observed here too; bounds any single-run eval comparison)
