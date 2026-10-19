@@ -26,7 +26,7 @@ set -euo pipefail
 MODS=/opt/glm53/mods
 ORDER="glm53-upstream-gbm glm53-upstream-alignperf glm53-eagle-backoff glm53-cache-reset glm53-model-overrides glm53-shm-recheck glm53-role-token-cache \
 glm53-video-placeholders glm53-indexer-rightsize glm53-suppress-stops glm53-prefix-admit glm53-scheduler-decode-floor \
-glm53-adaptive-k-b0 glm53-upstream-grammar-resample glm53-resident-tail glm53-sparse-miss-metric glm53-hybrid-prefix-hit glm53-fused-tables"
+glm53-adaptive-k-b0 glm53-upstream-grammar-resample glm53-strict-thinking glm53-tools-grammar-coexist glm53-resident-tail glm53-sparse-miss-metric glm53-hybrid-prefix-hit glm53-fused-tables"
 export GLM53_ROLE_TOKEN_CACHE=1 GLM53_SHM_RECHECK_50MS=1
 mode=apply
 case "${1:-}" in
@@ -58,6 +58,8 @@ CHECKS = [
     (D + "/v1/core/sched/scheduler.py", "[glm53-resident-tail]"),
     (D + "/v1/core/sched/scheduler.py", "[glm53-adaptive-k]"),
     (D + "/v1/core/sched/scheduler.py", "[glm53-grammar-resample]"),
+    (D + "/v1/structured_output/__init__.py", "[glm53-strict-thinking]"),
+    (D + "/parser/abstract_parser.py", "[glm53-tools-grammar-coexist]"),
     (D + "/v1/request.py", "num_invalid_spec_tokens"),
     (D + "/v1/core/sched/scheduler.py", "# [glm53-decode-floor]"),
     (D + "/v1/attention/backends/mla/indexer.py", "[glm53-indexer-workspace]"),
