@@ -56,7 +56,12 @@ if [ "${PUBLISH:-1}" = 1 ]; then
   [ -n "$IMAGE" ] || { echo "PUBLISH=1 needs IMAGE=ghcr.io/<owner>/<name>"; exit 1; }
   docker tag "$IMG_ID" "$IMAGE:$REF"
   docker push "$IMAGE:$REF"
-  echo "PUBLISHED: $IMAGE:$REF ($IMG_ID)"
+  if [ "$REF" != "latest" ]; then
+    # keep :latest aligned with every published build
+    docker tag "$IMG_ID" "$IMAGE:latest"
+    docker push "$IMAGE:latest"
+  fi
+  echo "PUBLISHED: $IMAGE:$REF (+latest) ($IMG_ID)"
 else
   echo "LOCAL BUILD DONE: $LOCAL_TAG ($IMG_ID) — publish skipped (PUBLISH=0)"
 fi
