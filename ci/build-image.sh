@@ -12,7 +12,7 @@
 #   REF         tag suffix for $IMAGE (default: latest)
 #   LOCAL_TAG   local docker tag produced by the chain (default glm53-selfbuild:serving)
 #   SHIP_OTHER  1 = ship to the peer spark node after build (default 1; 0 = skip)
-#   KIT_BRANCH  kit branch (default e10-exl3163 = exl3 1.6.3 retarget)
+#   KIT_BRANCH  kit branch (default main = our fork, exl3 1.6.3 retarget merged)
 #   BASE        the vllm nightly the serving lane requires (default: the pinned
 #               77154ca cu134 digest; the lane REFUSEs on anything else)
 set -euo pipefail
@@ -20,9 +20,9 @@ REPO_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 IMAGE=${IMAGE:-}
 REF=${REF:-latest}
 LOCAL_TAG=${LOCAL_TAG:-glm53-selfbuild:serving}
-KIT_BRANCH=${KIT_BRANCH:-e10-exl3163}
-# kit source: OUR fork carries the e8-exl3160 branch (exl3 1.6.0 retarget); upstream
-# Reederey87 main is the 1.4.9-era kit and does not have the branch
+KIT_BRANCH=${KIT_BRANCH:-main}
+# kit source: OUR fork (main = exl3 1.6.3 retarget merged); upstream Reederey87 main
+# is the 1.4.9-era kit and lacks the retarget
 KIT_REPO=${KIT_REPO:-https://github.com/gringus/glm53-flash-exl3-2x-dgx-spark.git}
 BASE=${BASE:-vllm/vllm-openai@sha256:94ac05830c84fd3cfafc792d932e7ce1a5f42404b28f0d3b0dbcc63abdab30a8}
 EXPECTED_BASE=${EXPECTED_BASE:-}
