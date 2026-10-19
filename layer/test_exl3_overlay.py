@@ -4,13 +4,112 @@
 This file is copied into the image at /opt/glm53/test_exl3_overlay.py and is
 the image-build / post-build self-check. It imports vLLM's registered method
 and LinearEXL3 — it does not reimplement the GEMM.
+
+Fingerprint gate (2026-10-19): the GPU selfcheck is the fail-closed boot gate —
+it must RUN on the first boot of any new/changed tree and FAIL the boot on a
+broken overlay — but on an UNCHANGED tree it is pure repeat cost (~53s on
+exl3 1.6.x vs ~25s on 1.4.x, ~28s of every deploy). Gate: hash the patchable
+tree (vllm .py content + everything else relpath:size:mtime, plus the glm53
+opt files), compare to the marker in the persistent /cache/runtime; match ->
+skip (marker proves this exact tree passed the full check). Any mismatch /
+missing marker / unreadable marker -> full run, marker written ONLY on success.
+GLM53_SELFCHECK_GATE=0 restores always-run (reboot only).
+GLM53_SELFCHECK_PROFILE=1 prints per-section timings (one line).
 """
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import subprocess
 import sys
+import time
+from pathlib import Path
+
+MARKER_PATH = Path(
+    os.environ.get(
+        "GLM53_SELFCHECK_MARKER", "/cache/runtime/glm53-selfcheck-marker.json"
+    )
+)
+
+
+def _tree_fingerprint() -> str:
+    """Hash the surfaces mods/bakes can change.
+
+    .py files (and anything else small): relpath + size + sha256(content).
+    Everything else (.so, big data): relpath + size + mtime_ns — stable for an
+    unchanged image, flips on any image/mod change. Fail-open: any read error
+    folds the error string into the hash (differs from the good marker).
+    """
+    dist = Path("/usr/local/lib/python3.12/dist-packages")
+    roots = [
+        Path(os.environ.get("GLM53_VLLM_DIR", str(dist / "vllm"))),
+        dist / "glm53_video_patch.py",
+        dist / "exllamav3_ext.so",
+        Path("/opt/glm53"),
+    ]
+    h = hashlib.sha256()
+    for root in roots:
+        if root.is_file():
+            entries = [root]
+        else:
+            try:
+                entries = sorted(p for p in root.rglob("*") if p.is_file())
+            except OSError as exc:
+                h.update(f"{root}:OSError:{exc}".encode())
+                continue
+        for p in entries:
+            try:
+                # __pycache__/.pyc are DERIVED artifacts the serve process
+                # regenerates after this check runs — hashing them would make
+                # the marker mismatch on every boot (skip would never fire).
+                if "__pycache__" in p.parts or p.suffix == ".pyc":
+                    continue
+                st = p.stat()
+                rel = str(p.relative_to(root if root.is_dir() else root.parent))
+                h.update(f"{rel}:{st.st_size}".encode())
+                if p.suffix == ".py" or st.st_size <= 1 << 20:
+                    h.update(hashlib.sha256(p.read_bytes()).digest())
+                else:
+                    h.update(f":{st.st_mtime_ns}".encode())
+            except OSError as exc:
+                h.update(f"{p}:OSError:{exc}".encode())
+    return h.hexdigest()
+
+
+def _gate_skip() -> bool:
+    """True when an identical tree already passed the full selfcheck."""
+    if os.environ.get("GLM53_SELFCHECK_GATE", "1") == "0":
+        return False
+    t0 = time.perf_counter()
+    try:
+        current = _tree_fingerprint()
+        marker = json.loads(MARKER_PATH.read_text())
+    except Exception:
+        return False
+    if marker.get("tree_hash") != current:
+        return False
+    print(
+        f"exl3 selfcheck SKIPPED (tree unchanged, marker "
+        f"{time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(marker.get('ts', 0)))}, "
+        f"hash+probe {time.perf_counter() - t0:.2f}s)",
+        flush=True,
+    )
+    return True
+
+
+def _gate_write() -> None:
+    if os.environ.get("GLM53_SELFCHECK_GATE", "1") == "0":
+        return
+    try:
+        MARKER_PATH.parent.mkdir(parents=True, exist_ok=True)
+        MARKER_PATH.write_text(
+            json.dumps({"tree_hash": _tree_fingerprint(), "ts": time.time()})
+        )
+    except OSError as exc:
+        print(f"exl3 selfcheck marker write failed ({exc!r}) — gate off next boot",
+              flush=True)
 
 
 def _check_quant_registry() -> None:
@@ -589,7 +688,7 @@ def _check_dflash2() -> None:
     assert "class Glm5NextModel(nn.Module, EagleModelMixin):" in glm
     assert "SupportsEagle3" in glm
     assert "aux_hidden_state_layers" in glm
-    # serving: the mHC tap is native and fused at 77154ca (MHCPostOp plumbing);
+    # e9: the mHC tap is native and fused at 77154ca (MHCPostOp plumbing);
     # the e7 kit tap line is gone.
     assert "mhc_post_op" in glm
     assert "hc_contract(" in glm
@@ -597,7 +696,7 @@ def _check_dflash2() -> None:
     kv = Path(
         "/usr/local/lib/python3.12/dist-packages/vllm/v1/core/kv_cache_utils.py"
     ).read_text()
-    # serving (77154ca): the hybrid-kv-v2 drafter-group rewrite is RETIRED - the
+    # e9 (77154ca): the hybrid-kv-v2 drafter-group rewrite is RETIRED - the
     # #57169 generic packed layout + CircularBufferSpec tail replace it. Assert
     # the new base machinery instead (and that the retired markers stay gone).
     assert "partial_hash_hits_enabled" in kv
@@ -618,15 +717,31 @@ def _check_dflash2() -> None:
 
 
 def main() -> int:
+    if _gate_skip():
+        return 0
     require_gpu = os.environ.get("EXL3_SELFCHECK_GPU", "1") != "0"
-    _check_quant_registry()
-    _check_tp_shard()
-    _check_ext_arch()
-    _check_dflash2()
+    profile = os.environ.get("GLM53_SELFCHECK_PROFILE", "0") == "1"
+    t0 = time.perf_counter()
+    marks: dict[str, float] = {}
+
+    def _timed(name: str, fn) -> None:
+        s = time.perf_counter()
+        fn()
+        marks[name] = time.perf_counter() - s
+
+    _timed("quant_registry", _check_quant_registry)
+    _timed("tp_shard", _check_tp_shard)
+    _timed("ext_arch", _check_ext_arch)
+    _timed("dflash2", _check_dflash2)
     if require_gpu:
-        _check_gpu_gemm()
+        _timed("gpu_gemm", _check_gpu_gemm)
     else:
         print("EXL3_SELFCHECK_GPU=0 — skipped GPU GEMM", flush=True)
+    _gate_write()
+    if profile:
+        parts = " ".join(f"{k}={v:.2f}s" for k, v in marks.items())
+        print(f"exl3 selfcheck profile: {parts} total={time.perf_counter() - t0:.2f}s",
+              flush=True)
     print("glm53 EXL3 overlay verify OK", flush=True)
     return 0
 
