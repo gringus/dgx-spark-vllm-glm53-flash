@@ -1,6 +1,6 @@
 recipe_version: '2'
 model: Mia-AiLab/GLM-5.3-Flash-EXL3-TR3-4bpw
-container: ghcr.io/gringus/dgx-spark-vllm-glm53-flash:latest  # ADOPTED PRIMARY 2026-10-15 (3rd adoption); 2026-10-16 + grammar-resample backport (#60451/#60690 core): image 6608e8cb45b9 (pre-fix tag e9-pre-gr = d747b7535a49); base = #57169 packed-KV 77154ca + exl3 1.6.0, mod set 18 (4 retired native); user bench n=10 benchmark/2026-10-15/20:34 wins 7/8 cells (pp2048 +4%, tg128 +9-11%, ctx_tg c2 +26%), ctx_pp c1 0.953 sole deficit (0.32 base, watch item); e7 arm = glm-5.3-flash-vllm-e7.yaml (image 81efcf9a653b)
+container: ghcr.io/gringus/dgx-spark-vllm-glm53-flash:latest  # e10 (ADOPTED PRIMARY 2026-10-19): 77154ca base + exl3 1.6.3 (kit fork main) + 20 mods incl. tools-grammar-coexist + strict-thinking (the structured-output + tools regression fix, see README); glm_hard 91% (177/194) = parity with the 0.31 reference
 runtime: vllm
 min_nodes: 2
 max_nodes: 2
@@ -8,7 +8,7 @@ metadata:
   description: >-
     GLM-5.3-Flash (EXL3/TR3 4bpw) + DFlash2 k=7 speculative decoding, TP=2 across
     2 DGX Spark nodes, 1M context. Built from this repo's image (vllm 77154ca +
-    exllamav3 1.6.0 + the mod layer in layer/mods). The bake is fail-closed and
+    exllamav3 1.6.3 + the 20-mod layer in layer/mods). The bake is fail-closed and
     marker-verified at build time; runtime gates live in env. See README.md for
     the mod inventory and the benchmark comparison against the 0.31-based
     predecessor.
