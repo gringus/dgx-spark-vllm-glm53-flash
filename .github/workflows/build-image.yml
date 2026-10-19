@@ -48,5 +48,4 @@ jobs:
           IMAGE: ghcr.io/${{ github.repository }}
           REF: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.ref || github.ref_name }}
           SHIP_OTHER: "0"
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: bash ci/build-image.sh

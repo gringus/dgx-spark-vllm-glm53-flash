@@ -62,30 +62,6 @@ if [ "${PUBLISH:-1}" = 1 ]; then
     docker push "$IMAGE:latest"
   fi
   echo "PUBLISHED: $IMAGE:$REF (+latest) ($IMG_ID)"
-  # prune untagged sibling versions (buildx provenance-attestation manifests)
-  # so the package listing stays clean; needs GH_TOKEN with packages:write
-  if [ -n "${GH_TOKEN:-}" ]; then
-    REPO_PATH="${IMAGE#ghcr.io/}"
-    API="https://api.github.com/users/${REPO_PATH%%/*}/packages/container/${REPO_PATH#*/}/versions"
-    PAGE=1
-    while [ $PAGE -le 3 ]; do
-      RESP=$(curl -s -H "Authorization: Bearer $GH_TOKEN" "$API?per_page=100&page=$PAGE")
-      IDS=$(printf '%s' "$RESP" | python3 -c '
-import json, sys
-try:
-    for v in json.load(sys.stdin):
-        if not (v.get("metadata", {}).get("container", {}).get("tags") or []):
-            print(v["id"])
-except Exception:
-    pass')
-      [ -z "$IDS" ] && break
-      for id in $IDS; do
-        curl -s -X DELETE -H "Authorization: Bearer $GH_TOKEN" "$API/$id" -o /dev/null
-        echo "pruned untagged package version $id"
-      done
-      PAGE=$((PAGE+1))
-    done
-  fi
 else
   echo "LOCAL BUILD DONE: $LOCAL_TAG ($IMG_ID) — publish skipped (PUBLISH=0)"
 fi
