@@ -1727,7 +1727,7 @@ echo "== lint gate (catches malformed merges before anything executes) =="
 DOCKER_BUILDKIT=1 docker build --check "${check_args[@]}" .
 trap 'rm -f "$DF"' EXIT
 docker pull "$BASE"
-DOCKER_BUILDKIT=1 docker build "${check_args[@]}" -t "$TAG" .
+DOCKER_BUILDKIT=1 docker build --provenance=false "${check_args[@]}" -t "$TAG" .
 
 echo "== pre-flight symbol check (no GPU) =="
 docker run --rm --entrypoint python3 "$TAG" -c \
