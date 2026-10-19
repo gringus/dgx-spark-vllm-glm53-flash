@@ -59,7 +59,7 @@ CHECKS = [
     (D + "/v1/core/sched/scheduler.py", "[glm53-adaptive-k]"),
     (D + "/v1/core/sched/scheduler.py", "[glm53-grammar-resample]"),
     (D + "/v1/structured_output/__init__.py", "[glm53-strict-thinking]"),
-    (D + "/v1/utils/import_utils.py", "[glm53-nixl-probe-skip]"),
+    (D + "/utils/import_utils.py", "[glm53-nixl-probe-skip]"),
     (D + "/parser/abstract_parser.py", "[glm53-tools-grammar-coexist]"),
     (D + "/v1/request.py", "num_invalid_spec_tokens"),
     (D + "/v1/core/sched/scheduler.py", "# [glm53-decode-floor]"),
