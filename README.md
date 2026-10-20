@@ -105,7 +105,7 @@ sparkrun run recipe/glm-5.3-flash-vllm.yaml
 ```
 
 Models pulled at start:
-- [Mia-AiLab/GLM-5.3-Flash-EXL3-TR3-4bpw](https://huggingface.co/Mia-AiLab/GLM-5.3-Flash-EXL3-TR3-4bpw) (target, EXL3 4bpw)
+- [brandonmusic/GLM-5.3-Flash-tr3-4bpw](https://huggingface.co/brandonmusic/GLM-5.3-Flash-tr3-4bpw) (target, EXL3 4bpw) — byte-identical public mirror; the original [Mia-AiLab/GLM-5.3-Flash-EXL3-TR3-4bpw](https://huggingface.co/Mia-AiLab/GLM-5.3-Flash-EXL3-TR3-4bpw) was gated/removed by its publisher on 2026-10-20 (also mirrored at [manateelazycat/GLM-5.3-Flash-EXL3-TR3-4bpw](https://huggingface.co/manateelazycat/GLM-5.3-Flash-EXL3-TR3-4bpw))
 - [incoai/GLM-5.3-Flash-DFlash2](https://huggingface.co/incoai/GLM-5.3-Flash-DFlash2) (drafter)
 
 ## Sources & references

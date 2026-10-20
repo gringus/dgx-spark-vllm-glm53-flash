@@ -1,5 +1,5 @@
 recipe_version: '2'
-model: Mia-AiLab/GLM-5.3-Flash-EXL3-TR3-4bpw
+model: brandonmusic/GLM-5.3-Flash-tr3-4bpw  # byte-identical public mirror (sha256-verified) of Mia-AiLab/GLM-5.3-Flash-EXL3-TR3-4bpw, which the publisher gated/removed 2026-10-20
 container: ghcr.io/gringus/dgx-spark-vllm-glm53-flash:latest  # e10 (ADOPTED PRIMARY 2026-10-19): 77154ca base + exl3 1.6.3 (kit fork main) + 20 mods incl. tools-grammar-coexist + strict-thinking (the structured-output + tools regression fix, see README); glm_hard 91% (177/194) = parity with the 0.31 reference
 runtime: vllm
 min_nodes: 2
@@ -29,7 +29,7 @@ defaults:
   max_model_len: 1000000
   max_num_seqs: 4
   max_num_batched_tokens: 7168
-  revision: 024db9f7e9871e8efdf21538ba55af7442be3cd5
+  revision: a5fee929cf4888b1824323e33e8a19b60129e025  # the mirror repo HEAD; content sha256-verified identical to the original snapshot
   speculative_config: '{"method":"dflash","model":"incoai/GLM-5.3-Flash-DFlash2","revision":"bf582e4eacc1810f76656d1811693ff6c6737d2a","num_speculative_tokens":7,"kv_cache_dtype":"auto","draft_tensor_parallel_size":2,"draft_sample_method":"probabilistic","rejection_sample_method":"standard"}'
 
 env:
